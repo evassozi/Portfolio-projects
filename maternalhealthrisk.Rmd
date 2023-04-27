@@ -1,0 +1,602 @@
+---
+title: "maternal health risk"
+author: "Eva Ssozi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Investigating the maternal health risk dataset from https://www.kaggle.com/datasets/csafrit2/maternal-health-risk-data
+
+The goal is to try and predict the risk level from the predictors provided.
+
+```{r}
+#libraries required:
+library(tidyverse)
+library(readxl)
+library(readr)
+library(esquisse)
+library(caret)
+library(randomForest)
+
+library(cluster)
+library(fpc)
+library(clustMixType)
+library(NbClust)
+```
+
+# **Exploratory Data Analysis, including cluster analysis**
+Showcasing EDA process, including K-means clustering.
+
+```{r}
+#Import dataset and inspect:
+df <- read.csv("Maternal Health Risk Data Set.csv")
+dim(df)
+str(df)
+```
+
+-Is there any cleaning required before hand: Use table function to take a closer look at each column contents:
+```{r}
+apply(df, 2, table) #no blanks, nas, strings in numerical columns, so looks good.
+```
+
+```{r}
+#change character types to factor type:
+df <- df %>%
+  mutate_if(is.character, as.factor)
+
+#check categorical columns:
+df_factor <- df %>%
+  select_if(is.factor)
+
+#freq:
+apply(df_factor, 2, table)
+```
+
+Only 7 variables in total, so lets make sure there are no duplicate rows:
+```{r}
+df <- df %>% distinct() #only 452 out of 1014 rows remain!!!
+```
+
+Summary statistics for the variables in the dataset:
+```{r}
+summary(df)
+```
+
+Some simple visualisations for each variable alone and with the target variable risklevel:
+```{r}
+age_pp <- df %>%
+  ggplot(aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "Age", y = "Count") +
+  scale_x_continuous(breaks=seq(0,70,5))
+
+age_pp
+```
+
+```{r}
+age_bp <- df %>%
+  ggplot(aes(x = Age)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+age_bp
+```
+
+
+```{r}
+syst_pp <- df %>%
+  ggplot(aes(x = SystolicBP)) +
+  geom_histogram(binwidth = 10, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "SystolicBP", y = "Count") +
+  scale_x_continuous(breaks=seq(60,160,10))
+
+syst_pp
+```
+
+```{r}
+syst_bp <- df %>%
+  ggplot(aes(x = SystolicBP)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+syst_bp
+```
+
+
+```{r}
+diast_pp <- df %>%
+  ggplot(aes(x = DiastolicBP)) +
+  geom_histogram(binwidth = 5, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "DiastolicBP", y = "Count") +
+  scale_x_continuous(breaks=seq(40,100,5))
+
+diast_pp
+```
+
+
+
+```{r}
+diast_bp <- df %>%
+  ggplot(aes(x = DiastolicBP)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+diast_bp
+```
+
+
+```{r}
+bs_pp <- df %>%
+  ggplot(aes(x = BS)) +
+  geom_histogram(binwidth = 1, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "Blood Glucose", y = "Count") +
+  scale_x_continuous(breaks=seq(5,20))
+
+bs_pp
+```
+
+```{r}
+bp_bp <- df %>%
+  ggplot(aes(x = BS)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+bp_bp
+```
+
+
+```{r}
+temp_pp <- df %>%
+  ggplot(aes(x = BodyTemp)) +
+  geom_histogram(binwidth = 1, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "Body Temperature", y = "Count") +
+  scale_x_continuous(breaks=seq(96,104))
+
+temp_pp
+```
+
+```{r}
+temp_bp <- df %>%
+  ggplot(aes(x = BodyTemp)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+temp_bp
+```
+
+
+```{r}
+heartrate_pp <- df %>%
+  ggplot(aes(x = HeartRate)) +
+  geom_histogram(binwidth = 5, fill = "blue") +
+  theme(legend.position = "none") +
+  labs(x = "HeartRate", y = "Count") +
+  scale_x_continuous(breaks=seq(5,100,10))
+
+heartrate_pp
+```
+
+
+```{r}
+heartrate_bp <- df %>%
+  ggplot(aes(x = HeartRate)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=8,
+                outlier.size=4)
+heartrate_bp
+```
+
+
+From the visualizations, we see that the heartrate variable has 1 record with heart rate 7, with a risk level of low which is odd, most likely outlier. Other variables have outliers, but their distributions are skewed. We will exclude this record for further analysis:
+
+```{r}
+df <- df %>%
+  filter(HeartRate != 7)
+dim(df)
+```
+
+
+Lets first carry out cluster analysis, Risk level is the target variable, so use it to see if the observations are clustered correctly:
+
+```{r}
+#add color column to df for cluster:
+df <- df %>%
+  mutate(riskcol = case_when(
+    RiskLevel == "high risk" ~ "red",
+    RiskLevel == "low risk" ~ "blue",
+    RiskLevel == "mid risk" ~ "orange"
+  ))
+
+df$riskcol <- as.factor(df$riskcol)
+sum(is.na(df$riskcol)) #0, so okay
+```
+
+
+```{r}
+#cluster preparation: standardisation using all 6 columns for clustering.
+df_scaled <- df
+df_scaled[,1:6] <- scale(df_scaled[,1:6])
+df_scaled
+```
+
+From the target column Risk level, we know there are 3 categories, so we use k =3 clusters:
+
+## **k-means clustering:**
+```{r}
+set.seed(1)
+kmeans_df <- kmeans(df_scaled[,1:6], 3, nstart = 25)
+kmeans_df #cluster sizes are 58, 232, 161
+
+#for comparison:
+table(df_scaled$RiskLevel) #112, 234, 106
+```
+
+Extracting silhouette widths of the clusters
+```{r}
+#distance matrix:
+df.dist <- dist(df_scaled[,1:6], method = "euclidean")
+
+y <- silhouette(kmeans_df$cluster, df.dist)
+#plot(y)
+
+sil_info <- summary(y)
+sil_info$clus.sizes
+sil_info$clus.avg.widths
+sil_info$avg.width #0.286, very low silhouette width, indicating no substantial structure formed
+
+#investigating within clusters sum of squares
+(kmeans_df$betweenss)/(kmeans_df$totss)
+```
+
+
+## **Hierarchical clustering**
+-complete linkage:
+```{r}
+compl_df <- hclust(df.dist, method = "complete")
+# Visualization of hclust
+plot(compl_df,labels = df_scaled$RiskLevel, -1, cex = 0.5)
+# Add rectangle around 3 groups
+rect.hclust(compl_df, k = 3, border = 2:4)
+
+identify(compl_df)
+```
+
+
+```{r}
+#extracting assignments
+cut_comp <- cutree(compl_df, k = 3)
+table(cut_comp) #51,171,229
+
+#for comparison:
+table(df_scaled$RiskLevel) #112, 234, 106
+
+#evaluating clustering by silhouette width:
+plot(silhouette(cutree(compl_df, k = 3), df.dist))
+#avg silhouette width is  0.27
+```
+
+cluster analysis without dimension reduction resulted in very poor average silhouette widths, so lets try PCA for dimension reduction:
+
+## **Principal Component analysis**
+```{r}
+#pca:
+df_pca <- prcomp(df_scaled[,1:6])
+
+#matrix of principal components
+dim(df_pca$x)
+```
+
+biplot for PCA:
+```{r}
+biplot(df_pca,scale=0)
+```
+
+
+```{r}
+#analysing results of pca:
+#extracting variation for each component
+pr_var <- df_pca$sdev^2 #eigen values
+prop_var <- pr_var/sum(pr_var)
+
+plot(pr_var, xlab = "Principal component", ylab = "Variance explained", type = "b")
+plot(prop_var, main = "Proportion of Variation-PCA", xlab="Principal Component", ylab="Proportion of Variance Explained", type='b')
+plot(cumsum(prop_var), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1), type='b')
+```
+
+
+**Determining the number of components to use: (http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/112-pca-principal-component-analysis-essentials/)**
+**1) An eigenvalue > 1 indicates that PCs account for more variance than accounted by one of the original variables in standardized data. This is commonly used as a cutoff point for which PCs are retained. This holds true only when the data are standardized**
+**2) You can also limit the number of component to that number that accounts for a certain fraction of the total variance. For example, if you are satisfied with 70% of the total variance explained then use the number of components to achieve that.**
+
+```{r}
+#comparing cumulative variation
+variance_percent <- prop_var*100
+cumulative_var <- cumsum(prop_var) *100
+
+#extraction of eigen values:
+eigen_values <- pr_var
+dimension <- c(1:6) 
+pca_df <- cbind(dimension, eigen_values, variance_percent, cumulative_var)
+```
+
+```{r}
+#pca, eigen values in dataframe:
+pca_df <- as.data.frame(pca_df, row.names = rownames(pca_df), col.names = colnames(pca_df))
+```
+
+
+-Number of principal components with eigen values greater than 1 is 2, which account for 58.868% of the variation.
+```{r}
+#extracting data from pca output
+df_pca_selected <- df_pca$x[,1:2] #58.868%
+
+#information into a dataframe:
+df_pca_selected <- as.data.frame(df_pca_selected, row.names = rownames(df_pca_selected), col.names = colnames(df_pca_selected))
+
+dim(df_pca_selected)
+
+sum(is.na(df_pca_selected))
+
+
+```
+
+
+## **K-means clustering after PCA**
+```{r}
+set.seed(1)
+kmeans_dfpca <- kmeans(df_pca_selected, 3, nstart = 25)
+kmeans_dfpca #cluster sizes are 65, 223, 163
+
+#for comparison:
+table(df_scaled$RiskLevel) #112, 234, 106
+```
+
+Extracting silhouette widths of the clusters
+```{r}
+#distance matrix:
+dfpca.dist <- dist(df_pca_selected, method = "euclidean")
+
+y <- silhouette(kmeans_dfpca$cluster, dfpca.dist)
+#plot(y)
+
+sil_info <- summary(y)
+sil_info$clus.sizes
+sil_info$clus.avg.widths
+sil_info$avg.width #0.428, still a weak structure
+
+#investigating between clusters sum of squares
+(kmeans_dfpca$betweenss)/(kmeans_dfpca$totss)
+```
+
+**Very limited improvement on average silhouette width after PCA, so maybe cluster analysis most likely won't be helpful for this dataset as is, might need to do feature selection.**
+
+# **Classification models to predict risk level: before feature selection**
+
+```{r}
+#remove colour column we added, since we didn't use it and we won't need it
+df <- df %>% select(-riskcol)
+
+#splitting into train and test set:
+set.seed(1)
+index <- createDataPartition(df$RiskLevel, times = 1, p = 0.8, list = F)
+train <- df[index,]
+test <- df[-index,]
+
+table(train$RiskLevel)
+table(test$RiskLevel)
+```
+
+
+## *Fitting a simple random forest model*
+```{r}
+#scaling is not required for random forest algorithm
+set.seed(1)
+rf_df <- randomForest(RiskLevel ~., data = df, subset = index, ntree = 50, importance =T, do.trace = 100)
+rf_df
+```
+
+
+```{r}
+#predicting using test set:
+yhat.rf <- predict(rf_df, newdata = test)
+
+#confusion matrix:
+rftest_tab <- table(yhat.rf, test$RiskLevel)
+confusionMatrix(rftest_tab)
+
+#missclassification error:
+rf_err <- mean(yhat.rf != test$RiskLevel)
+rf_err #0.303
+```
+
+## *Fitting a simple bagged model*
+```{r}
+set.seed(1)
+bag_df <- randomForest(RiskLevel ~., data = df, subset = index, mtry = ncol(df)-1, ntree = 50, importance =T, do.trace = 100)
+bag_df
+```
+
+```{r}
+#predicting using test set:
+yhat.bag <- predict(bag_df, newdata = test)
+
+#confusion matrix:
+bagtest_tab <- table(yhat.bag, test$RiskLevel)
+confusionMatrix(bagtest_tab)
+
+#missclassification error:
+bag_err <- mean(yhat.bag != test$RiskLevel)
+bag_err #0.337
+```
+
+## *random forest with hyperparameter tuning (random forest accuracy was higher than bagged model accuracy*
+```{r}
+#tuning using all variables, train set, using ranger():
+set.seed(1)
+# Creating combinations of hyperparameters
+rf_grid <- expand.grid(mtry = 2:6, #max is bagging which is total no. of features
+                       splitrule = c('gini','extratrees'), #Have to specify. This is RSS for classification.
+                       min.node.size = c(1,2,3,4,5,6))
+rf_grid
+ctrl <- trainControl(method = 'oob', verboseIter = T)
+
+# Use ranger to run all these models...will take some time on slower machines!
+rf_gridsearch <- train(RiskLevel ~ ., 
+                       data = df,
+                       subset = index,
+                       method = 'ranger',
+                       num.trees = 50,
+                       verbose = T,
+                       trControl = ctrl,
+                       tuneGrid = rf_grid) #Here is the grid
+
+rf_gridsearch$finalModel
+```
+
+```{r}
+#predicting using test set:
+yhat.rfgrid <- predict(rf_gridsearch, newdata = test)
+
+#confusion matrix:
+rfgridtest_tab <- table(yhat.rfgrid, test$RiskLevel)
+confusionMatrix(rfgridtest_tab)
+
+#missclassification error:
+rfgrid_err <- mean(yhat.rfgrid != test$RiskLevel)
+rfgrid_err #0.270
+```
+
+## *feature selection using the boruta library*
+```{r}
+library(Boruta)
+
+#Feature selection using boruta:
+set.seed(1)
+boruta <- Boruta(RiskLevel ~ ., data = df, doTrace = 2)
+```
+
+```{r}
+#print boruta object and plot
+print(boruta)
+plot(boruta, las = 2, cex.axis = 0.7)
+plotImpHistory(boruta)
+```
+
+Tentative Fix
+```{r}
+#exploring boruta object
+bor <- TentativeRoughFix(boruta)
+print(bor)
+attStats(boruta)
+```
+
+
+From the Boruta plots, we see that Heart Rate is the least important of the 6 variables. so lets exclude it and see if missclassification errors  in the random forest, bagged and gridsearch models improve.
+
+
+```{r}
+df2 <- df %>% select(-HeartRate)
+#splitting into train and test set:
+set.seed(1)
+index2 <- createDataPartition(df2$RiskLevel, times = 1, p = 0.8, list = F)
+train2 <- df2[index2,]
+test2 <- df2[-index2,]
+```
+
+
+
+## *Fitting a simple random forest model*
+```{r}
+#scaling is not required for random forest algorithm
+set.seed(1)
+rf_df2 <- randomForest(RiskLevel ~., data = df2, subset = index2, ntree = 50, importance =T, do.trace = 100)
+rf_df2
+```
+
+
+```{r}
+#predicting using test set:
+set.seed(1)
+yhat.rf2 <- predict(rf_df2, newdata = test2)
+
+#confusion matrix:
+rf2test_tab <- table(yhat.rf2, test2$RiskLevel)
+confusionMatrix(rf2test_tab)
+
+#missclassification error:
+rf2_err <- mean(yhat.rf2 != test2$RiskLevel)
+rf2_err #0.315, no improvement from 0.315
+```
+
+## *Fitting a simple bagged model*
+```{r}
+set.seed(1)
+bag_df2 <- randomForest(RiskLevel ~., data = df2, subset = index2, mtry = ncol(df2)-1, ntree = 50, importance =T, do.trace = 100)
+bag_df2
+```
+
+```{r}
+#predicting using test set:
+set.seed(1)
+yhat.bag2 <- predict(bag_df2, newdata = test2)
+
+#confusion matrix:
+bag2test_tab <- table(yhat.bag2, test2$RiskLevel)
+confusionMatrix(bag2test_tab)
+
+#missclassification error:
+bag2_err <- mean(yhat.bag2 != test2$RiskLevel)
+bag2_err #0.315, which is worse than 0.3034
+```
+
+## *random forest with hyperparameter tuning (random forest accuracy was higher than bagged model accuracy*
+```{r}
+#tuning using all variables, train set, using ranger():
+set.seed(1)
+# Creating combinations of hyperparameters
+rf2_grid <- expand.grid(mtry = 2:5, #max is bagging which is total no. of features
+                       splitrule = c('gini','extratrees'), #Have to specify. This is RSS for classification.
+                       min.node.size = c(1,2,3,4,5))
+rf2_grid
+ctrl <- trainControl(method = 'oob', verboseIter = T)
+
+# Use ranger to run all these models...will take some time on slower machines!
+rf2_gridsearch <- train(RiskLevel ~ ., 
+                       data = df2,
+                       subset = index2,
+                       method = 'ranger',
+                       num.trees = 50,
+                       verbose = T,
+                       trControl = ctrl,
+                       tuneGrid = rf2_grid) #Here is the grid
+
+rf2_gridsearch$finalModel
+```
+
+
+```{r}
+#predicting using test set:
+set.seed(1)
+yhat.rf2grid <- predict(rf2_gridsearch, newdata = test2)
+
+#confusion matrix:
+rfgridtest2_tab <- table(yhat.rf2grid, test2$RiskLevel)
+confusionMatrix(rfgridtest2_tab)
+
+#missclassification error:
+rf2grid_err <- mean(yhat.rf2grid != test2$RiskLevel)
+rf2grid_err #0.247, a slight improvement from 0.270
+```
+
+**For the random forest algorithm, the hypertuned model and dataset without the heart rate variable gives the lowest miss-classification rate of 0.247. However it should be noted that once the duplicate observations were removed, only 451 records were left out of the original 1014. A larger dataset would have been preferable**
+
+
+
+
+
+
+
+
