@@ -445,3 +445,6 @@ cluster_2017_plot
 **In both 2014 and 2017, "Professional, Scientific & Technical Services" was in a cluster of its own, could be an outlier**
 **This sub sector has the highest population, but the average wage is closer to the middle when compared to the other sectors**
 
+
+Testing github pulling and pushing requests:
+-this is 2nd push to github
