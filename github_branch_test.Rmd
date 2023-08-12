@@ -1,0 +1,447 @@
+---
+title: "Industrial software dataset"
+author: "Eva Ssozi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+-industrial dataset from the internet, source:https://datausa.io/profile/soc/software-developers-applications-systems-software
+```{r}
+#libraries required:
+library(tidyverse)
+library(readxl)
+library(readr)
+library(esquisse)
+
+library(cluster)
+library(fpc)
+library(clustMixType)
+library(NbClust)
+```
+
+# **Exploratory Data Analysis, including K-means cluster analysis**
+Showcasing EDA process, including K-means clustering.
+
+```{r}
+#Import dataset
+Industries_by_Share <- read_csv("Industries by Share.csv")
+View(Industries_by_Share)
+```
+
+
+```{r}
+#On observation, this dataset has a number of columns that are all one value. Investigate to eliminate these.
+#change character types to factor type:
+df <- Industries_by_Share %>%
+  mutate_if(is.character, as.factor)
+```
+
+
+```{r}
+#view summaries for all variables
+summary(df)
+```
+
+```{r}
+#frequency tables for all the factor variables in df: to see which variables have only one level and can therefore be excluded from further analysis
+
+#select only factor variables
+df_factor_freq <- df %>%
+  select_if(is.factor)
+
+#calculate frequency
+apply(df_factor_freq, 2, table)
+```
+
+```{r}
+#exclude columns with only one level from df:
+#ID columns are directly paired with the columns they represent, so they are also excluded
+df_2 <- df %>%
+  select(Industry_Sector,Industry_Sub_Sector,Industry_Group,Year,Workforce_Status,Total_Population,Total_Population_MOE_Appx,Average_Wage,Average_Wage_Appx_MOE,Record_Count,Slug_Industry_Group)
+```
+
+```{r}
+#checking workforce status column, seems to be filled with just "TRUE":
+check_workforce <- df_2 %>%
+  filter(Workforce_Status == FALSE)
+
+check_workforce #empty, so remove this column as well
+
+df_2 <- df_2 %>% select(-Workforce_Status)
+```
+
+```{r}
+#checking for nas in the columns of df_2:
+apply(df_2, 2, function(x) sum(is.na(x)))
+#column Slug_Industry_Group has 8 rows with NA
+```
+
+```{r}
+#inspect the NA's found:
+check_na <- df_2 %>% filter(is.na(Slug_Industry_Group))
+check_na #two sectors: construction and Professional(4); Scientific & Management, and Administrative & Waste Management Services(4 out of many)
+
+#exclude these nas:
+df_2 <- na.omit(df_2)
+```
+
+Bar chats for some of the categorical variables' population: Plotting population and Average wage for the industry sectors and sub-sectors.
+
+```{r}
+#change year to factor for visualisation prep:
+df_2$Year <- as.factor(df_2$Year)
+levels(df_2$Year) #2014, 2015, 2016, 2017
+```
+
+- Population for Industry Sector
+```{r}
+indust_sector <- df_2 %>%
+  ggplot(aes(x = Total_Population, y = Industry_Sector)) +
+  facet_grid(.~ Year) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "bottom") +
+  labs(x = "Population", y = "Industry Sector")
+
+indust_sector
+```
+
+- Population for Industry sub Sector
+```{r}
+indust_sub_sector <- df_2 %>%
+  ggplot(aes(x = Total_Population, y = Industry_Sub_Sector)) +
+  facet_grid(.~ Year) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "bottom") +
+  labs(x = "Population", y = "Industry sub sector")
+
+indust_sub_sector
+```
+
+Bar chats for some of the categorical variables' average wages:
+
+- Average Wages for Industry Sector
+```{r}
+indust_sector <- df_2 %>%
+  ggplot(aes(x = Average_Wage, y = Industry_Sector)) +
+  facet_grid(.~ Year) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "bottom") +
+  labs(x = "Average Wage", y = "Industry Sector")
+
+indust_sector
+```
+
+
+- Average Wages for Industry Sub-Sector
+```{r}
+indust_sub_sector <- df_2 %>%
+  ggplot(aes(x = Average_Wage, y = Industry_Sub_Sector)) +
+  facet_grid(.~ Year) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "bottom") +
+  labs(x = "Average Wage", y = "Industry sub sector")
+
+indust_sub_sector
+```
+
+-Individual plots for each Year: Variation of population, average wage and record count by year:
+```{r}
+#data prep
+df_3 <- df_2 %>%
+  mutate(totalwage = Average_Wage * Total_Population) %>%
+  group_by(Industry_Sector,Industry_Sub_Sector,Year) %>%
+  summarise(allpopn = sum(Total_Population),
+            groupwage = sum(totalwage)) %>%
+  mutate(averagewage_subsector_year = groupwage/allpopn)
+```
+
+*2014, population:*
+
+```{r}
+indust_sub_sector_2014_popn <- df_3 %>%
+  ungroup() %>%
+  filter(Year == "2014") %>%
+  ggplot(aes(x = allpopn, y = reorder(Industry_Sub_Sector, -allpopn))) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "bottom") +
+  labs(x = "Population", y = "Industry sub sector")
+
+indust_sub_sector_2014_popn
+```
+
+
+*All years, population, sub-sectors:*
+```{r}
+indust_sub_sector_popn <- df_3 %>%
+  ungroup() %>%
+  ggplot(aes(x = allpopn, y = reorder(Industry_Sub_Sector, -allpopn), fill = Year)) +
+  geom_bar(stat = "identity") +
+  facet_grid(.~Year) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  labs(x = "Population", y = "Industry sub sector")
+
+indust_sub_sector_popn
+```
+
+
+*All years, average wage, sub-sectors:*
+```{r}
+indust_sub_sector_avwage <- df_3 %>%
+  ungroup() %>%
+  ggplot(aes(x = averagewage_subsector_year, y = reorder(Industry_Sub_Sector, -averagewage_subsector_year), fill = Year)) +
+  geom_bar(stat = "identity") +
+  facet_grid(.~Year) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  labs(x = "Average wage", y = "Industry sub sector")
+
+indust_sub_sector_avwage
+```
+
+
+*cluster analysis by year: using population and average wage for each sub-sector*
+```{r}
+#extract columns for clustering
+cluster_df <- df_3 %>%
+  ungroup() %>%
+  select(Industry_Sub_Sector,Year,allpopn,averagewage_subsector_year)
+
+cluster_df
+```
+
+
+```{r}
+#cluster preparation: standardisation only, since there are only 2 columns for clustering, no dimension reduction is required.
+cluster_df[,3:4] <- scale(cluster_df[,3:4])
+cluster_df
+
+```
+
+
+*Year = 2014*
+```{r}
+#data prep for cluster input:
+df_2014 <- cluster_df %>%
+  filter(Year == "2014") %>%
+  select(allpopn,averagewage_subsector_year)
+
+df_2014
+#dimensions:
+dim(df_2014) #18, 2
+```
+
+*Only 18 observations, so decided to limit number of clusters search to 6*
+
+a) Number of clusters using elbow method: elbow at 2 or 3
+
+```{r}
+#Elbow method for k-means clustering, raw data*
+
+set.seed(1)
+
+#compute and plot wss for k =2 to k =6
+k.max <- 6 #maximum number of clusters
+
+wss <- sapply(1:k.max, function(k){kmeans(df_2014, k, nstart = 25)$tot.withinss}) #sapply(x, function(x))
+
+plot(1:k.max, wss, type="b", pch=19, frame=T, xlab="Number of clusters K", ylab="Total within-clusters sum of squares", main="Total Within Clusters sum of squares for Kmeans")
+```
+
+
+b) Silhouette method for choosing k for k-means clustering: suggests 2 clusters
+```{r}
+#computing euclidean pairwise distances
+df_2014.dist <- dist(df_2014, method="euclidean")
+
+k.max <- 6
+
+sil <- rep(0, k.max)
+
+#compute the average silhouette width for k=2 to k=k.max
+for(i in 2:k.max){
+  km.res <- kmeans(df_2014, centers=i, nstart=25) #kmeans with i clusters (from 2 to k.max clusters)
+  ss <- silhouette(km.res$cluster,df_2014.dist) #calculating silhouette widths
+  sil[i] <- mean(ss[,3]) #average of silhouette widths which are in column 3
+}
+
+#plot the average silhouette width
+plot(1:k.max, sil, type="b", pch=19, frame=T, xlab="Number of clusters k", ylab = "Average Silhouette Width", main = "Average Silhouette Widths for Kmeans")
+abline(v=which.max(sil), lty=2)
+```
+
+c) NBClust method: suggests 3 clusters
+```{r}
+res.nb1 <- NbClust(df_2014, distance = "euclidean", min.nc = 2, max.nc = 6, method = "kmeans", index = "all")
+#best number of clusters is 3
+```
+
+
+k means: using 3 clusters
+```{r}
+set.seed(1)
+kmeans_df2014 <- kmeans(df_2014, 3, nstart = 25)
+kmeans_df2014
+#cluster sizes are 11,6 and 1
+```
+
+Extracting silhouette widths of the clusters
+```{r}
+y <- silhouette(kmeans_df2014$cluster, df_2014.dist)
+#plot(y)
+
+sil_info <- summary(y)
+sil_info$clus.sizes
+sil_info$clus.avg.widths
+sil_info$avg.width #0.567, reasonable structure
+
+#investigating between clusters sum of squares
+(kmeans_df2014$betweenss)/(kmeans_df2014$totss)
+```
+
+
+```{r}
+#add cluster assignments to original data (2014):
+cluster_df_2014 <- df_3 %>%
+  ungroup() %>%
+  select(Industry_Sub_Sector,Year,allpopn,averagewage_subsector_year) %>%
+  filter(Year == "2014")
+
+cluster_df_2014$cluster <- kmeans_df2014$cluster
+cluster_df_2014
+```
+
+
+Plot and colour by cluster:
+```{r}
+cluster_df_2014$cluster <- as.factor(cluster_df_2014$cluster)
+```
+
+```{r}
+#cluster plot:
+cluster_2014_plot <- cluster_df_2014 %>%
+  ggplot(aes(x = allpopn, y = averagewage_subsector_year, label = Industry_Sub_Sector)) +
+  geom_point(aes(color = cluster), size = 3) +
+  geom_text(hjust = 0, vjust = 0)
+  theme(legend.position = "right") +
+  labs(x = "Population", y = "Average Wage")
+
+cluster_2014_plot
+```
+
+*Year = 2017*
+```{r}
+#data prep for cluster input:
+df_2017 <- cluster_df %>%
+  filter(Year == "2017") %>%
+  select(allpopn,averagewage_subsector_year)
+
+df_2017
+
+dim(df_2017) #19, 2
+```
+
+*Only 19 observations, so decided to limit number of clusters search to 6*
+
+a) Number of clusters using elbow method: elbow at 3 or 4
+```{r}
+#Elbow method for k-means clustering, raw data*
+
+set.seed(1)
+
+#compute and plot wss for k =2 to k =6
+k.max <- 6 #maximum number of clusters
+
+wss <- sapply(1:k.max, function(k){kmeans(df_2017, k, nstart = 25)$tot.withinss}) #sapply(x, function(x))
+
+plot(1:k.max, wss, type="b", pch=19, frame=T, xlab="Number of clusters K", ylab="Total within-clusters sum of squares", main="Total Within Clusters sum of squares for Kmeans")
+```
+
+
+b) Silhouette method for choosing k for k-means clustering: suggests 5 clusters
+```{r}
+
+#computing euclidean pairwise distances
+df_2017.dist <- dist(df_2017, method="euclidean")
+
+k.max <- 6
+
+sil <- rep(0, k.max)
+
+#compute the average silhouette width for k=2 to k=k.max
+for(i in 2:k.max){
+  km.res <- kmeans(df_2017, centers=i, nstart=25) #kmeans with i clusters (from 2 to k.max clusters)
+  ss <- silhouette(km.res$cluster,df_2017.dist) #calculating silhouette widths
+  sil[i] <- mean(ss[,3]) #average of silhouette widths which are in column 3
+}
+
+#plot the average silhouette width
+plot(1:k.max, sil, type="b", pch=19, frame=T, xlab="Number of clusters k", ylab = "Average Silhouette Width", main = "Average Silhouette Widths for Kmeans")
+abline(v=which.max(sil), lty=2)
+```
+
+c) NBClust method: suggests 4 clusters
+```{r}
+res.nb1 <- NbClust(df_2017, distance = "euclidean", min.nc = 2, max.nc = 6, method = "kmeans", index = "all")
+#best number of clusters is 4
+```
+
+
+k means clustering:
+```{r}
+#k means clustering:
+set.seed(1)
+kmeans_df2017 <- kmeans(df_2017, 4, nstart = 25)
+kmeans_df2017
+#cluster sizes are 6,1,2,10
+```
+
+Extracting silhouette widths of the clusters
+```{r}
+y <- silhouette(kmeans_df2017$cluster, df_2017.dist)
+#plot(y)
+
+sil_info <- summary(y)
+sil_info$clus.sizes
+sil_info$clus.avg.widths
+sil_info$avg.width #0.504, indicating a reasonable structure
+
+#investigating between clusters sum of squares
+(kmeans_df2017$betweenss)/(kmeans_df2017$totss)
+```
+
+
+```{r}
+#add cluster assignments to original data (2014):
+
+cluster_df_2017 <- df_3 %>%
+  ungroup() %>%
+  select(Industry_Sub_Sector,Year,allpopn,averagewage_subsector_year) %>%
+  filter(Year == "2017")
+
+cluster_df_2017$cluster <- kmeans_df2017$cluster
+cluster_df_2017
+```
+Plot and colour by cluster:
+```{r}
+cluster_df_2017$cluster <- as.factor(cluster_df_2017$cluster)
+```
+
+```{r}
+cluster_2017_plot <- cluster_df_2017 %>%
+  ggplot(aes(x = allpopn, y = averagewage_subsector_year, label = Industry_Sub_Sector)) +
+  geom_point(aes(color = cluster), size = 3) +
+  geom_text(hjust = 0, vjust = 0)
+  theme(legend.position = "right") +
+  labs(x = "Population", y = "Average Wage")
+
+cluster_2017_plot
+```
+
+**In both 2014 and 2017, "Professional, Scientific & Technical Services" was in a cluster of its own, could be an outlier**
+**This sub sector has the highest population, but the average wage is closer to the middle when compared to the other sectors**
+
